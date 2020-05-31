@@ -2,6 +2,8 @@
 USE CHUNGKHOAN
 GO
 
+SELECT NAME, is_broker_enabled, service_broker_guid FROM sys.databases
+
 
 SET ANSI_NULLS ON
 GO
@@ -91,7 +93,7 @@ GO
 --------------------------------------------< CURSOR >--------------------------------------------
 CREATE PROCEDURE [dbo].[CursorLoaiGD]
   @OutCrsr CURSOR VARYING OUTPUT, 
-  @macp NVARCHAR( 10), @Ngay NVARCHAR( 50),  @LoaiGD CHAR 
+  @macp NVARCHAR( 10), @Ngay datetime,  @LoaiGD CHAR 
 AS
 SET DATEFORMAT DMY 
 IF (@LoaiGD='M') 
@@ -110,7 +112,6 @@ ELSE
     ORDER BY GIADAT, NGAYDAT 
 OPEN @OutCrsr
 
-
 GO
 /****** Object:  StoredProcedure [dbo].[SP_KHOPLENH_LO]    Script Date: 3/30/2020 10:36:42 PM ******/
 SET ANSI_NULLS ON
@@ -119,153 +120,118 @@ SET QUOTED_IDENTIFIER ON
 GO
 
 
-
-
-
-
 CREATE PROC [dbo].[SP_KHOPLENH_LO]
- @macp NVARCHAR( 10), @Ngay NVARCHAR( 50),  @LoaiGD CHAR, 
+ @macp NVARCHAR( 10),  @LoaiGD CHAR,
  @soluongMB INT, @giadatMB FLOAT 
 AS
 SET DATEFORMAT DMY
-DECLARE @CrsrVar CURSOR , @ngaydat NVARCHAR( 50), @soluong INT, @giadat FLOAT,  @soluongkhop INT, @giakhop FLOAT,@idlenhdat int
- IF (@LoaiGD='B')
-   EXEC CursorLoaiGD  @CrsrVar OUTPUT, @macp,@Ngay, 'M'
- ELSE 
-  EXEC CursorLoaiGD  @CrsrVar OUTPUT, @macp,@Ngay, 'B'
+DECLARE @ngay datetime=getdate()
+
+DECLARE @CrsrVar CURSOR ,@id INT, @ngaydat NVARCHAR(50), @soluong INT, @giadat FLOAT,  @soluongkhop INT, @giakhop FLOAT
+	IF (@LoaiGD='B')
+		EXEC CursorLoaiGD  @CrsrVar OUTPUT, @macp, @ngay, 'M'
+	ELSE 
+		EXEC CursorLoaiGD  @CrsrVar OUTPUT, @macp, @ngay, 'B'
   
-FETCH NEXT FROM @CrsrVar  INTO  @ngaydat , @soluong , @giadat ,@idlenhdat
+
+FETCH NEXT FROM @CrsrVar  INTO @ngaydat , @soluong , @giadat ,@id
+SELECT @@FETCH_STATUS
 WHILE (@@FETCH_STATUS <> -1 AND @soluongMB >0)
-BEGIN
- IF  (@LoaiGD='B' )
- BEGIN
-   IF  (@giadatMB <= @giadat)
-   BEGIN
-     IF (@soluongMB >= @soluong)
-     BEGIN
-       SET @soluongkhop = @soluong
-       SET @giakhop = @giadat
-       SET @soluongMB = @soluongMB - @soluong
-       UPDATE dbo.LENHDAT  
-         SET SOLUONG = 0,TRANGTHAILENH = N'khớp hết'
-         WHERE CURRENT OF @CrsrVar
-     END
-     ELSE
-     BEGIN
-       SET @soluongkhop = @soluongMB
-       SET @giakhop = @giadat
+	BEGIN
+	 IF  (@LoaiGD='B' )
+		IF  (@giadatMB <= @giadat)
+		   BEGIN
+				IF @soluongMB >= @soluong
+					BEGIN
+					  SET @soluongkhop = @soluong
+					  SET @giakhop = @giadat
+					  SET @soluongMB = @soluongMB - @soluong
+					  UPDATE dbo.LENHDAT  
+						SET SOLUONG = 0,TRANGTHAILENH='KH'
+						WHERE CURRENT OF @CrsrVar
+					END
+				ELSE
+					BEGIN
+					  SET @soluongkhop = @soluongMB
+					  SET @giakhop = @giadat
        
-       UPDATE dbo.LENHDAT  
-         SET SOLUONG = SOLUONG - @soluongMB, TRANGTHAILENH = N'khớp lệnh 1 phần'
-         WHERE CURRENT OF @CrsrVar
-		SET @soluongMB = 0
-     END
-     SELECT  @soluongkhop, @giakhop,@giadat, @idlenhdat
-     -- Cập nhật table LENHKHOP
-	 INSERT INTO dbo.LENHKHOP
-	         ( NGAYKHOP ,
-	           SOLUONGKHOP ,
-	           GIAKHOP ,
-	           IDLENHDAT
-	         )
-	 VALUES  ( @Ngay, -- NGAYKHOP - datetime
-	           @soluongkhop , -- SOLUONGKHOP - int
-	           @giakhop , -- GIAKHOP - float
-	           @idlenhdat -- IDLENHDAT - int
-	         )
-	END
-     ELSE
-	 BEGIN
-	  INSERT INTO dbo.LENHDAT
-	         ( MACP ,
-	           NGAYDAT ,
-	           LOAIGD ,
-	           LOAILENH,
-			   SOLUONG,
-			   GIADAT,
-			   TRANGTHAILENH
-	         )
-	 VALUES  (	@macp,
-			   @Ngay, -- NGAYKHOP - datetime
-			   @LoaiGD,
-			   'LO',
-	            @soluongMB , -- SOLUONGKHOP - int
-	           @giadatMB , -- GIAKHOP - float
-	           'CK' -- IDLENHDAT - int
-	         )
-			 SET @soluongMB=0
-	END
-END
+					  UPDATE dbo.LENHDAT  
+						SET SOLUONG = SOLUONG - @soluongMB,TRANGTHAILENH='KMP'
+						WHERE CURRENT OF @CrsrVar
+					  SET @soluongMB = 0
+					END
+				INSERT INTO LENHKHOP(NGAYKHOP,SOLUONGKHOP,GIAKHOP, IDLENHDAT)
+				VALUES(@ngay,@soluongkhop,@giakhop,@id)
+				-- support dependency--start
+				IF EXISTS (SELECT * FROM BANGGIATRUCTUYEN WHERE MACP=@macp)
+					BEGIN
+						update BANGGIATRUCTUYEN set GIAKHOP=@giakhop, KHOILUONGKHOP=@soluongkhop where MACP=@macp
+					END
+				ELSE
+					BEGIN
+						INSERT INTO BANGGIATRUCTUYEN (MACP,GIAKHOP,KHOILUONGKHOP) VALUES (@macp,@giakhop,@soluongkhop)
+				END
+				-- support dependency--end
+				
+				FETCH NEXT FROM @CrsrVar INTO  @ngaydat , @soluong , @giadat, @id
+			END
+		ELSE
+			GOTO THOAT
 
-ELSE
- BEGIN
-  IF  (@giadatMB >= @giadat)
-   BEGIN
-     IF @soluongMB >= @soluong
-     BEGIN
-       SET @soluongkhop = @soluong
-       SET @giakhop = @giadat
-       SET @soluongMB = @soluongMB - @soluong
-       UPDATE dbo.LENHDAT  
-         SET SOLUONG = 0,TRANGTHAILENH = N'khớp hết'
-         WHERE CURRENT OF @CrsrVar
-     END
-     ELSE
-     BEGIN
-       SET @soluongkhop = @soluongMB
-       SET @giakhop = @giadat
+	ELSE
+		IF(@giadatMB >= @giadat)
+			BEGIN
+				IF @soluongMB >= @soluong
+					BEGIN
+					  SET @soluongkhop = @soluong
+					  SET @giakhop = @giadat
+					  SET @soluongMB = @soluongMB - @soluong
+					  UPDATE dbo.LENHDAT  
+						SET SOLUONG = 0,TRANGTHAILENH='KH'
+						WHERE CURRENT OF @CrsrVar
+					END
+				ELSE
+					BEGIN
+					  SET @soluongkhop = @soluongMB
+					  SET @giakhop = @giadat
        
-       UPDATE dbo.LENHDAT  
-         SET SOLUONG = SOLUONG - @soluongMB, TRANGTHAILENH = N'khớp lệnh 1 phần'
-         WHERE CURRENT OF @CrsrVar
-       SET @soluongMB = 0
-     END
-    SELECT  @soluongkhop, @giakhop, @giadat, @idlenhdat
-	 
-	 INSERT INTO dbo.LENHKHOP
-	         ( NGAYKHOP ,
-	           SOLUONGKHOP ,
-	           GIAKHOP ,
-	           IDLENHDAT
-	         )
-	 VALUES  ( @Ngay, -- NGAYKHOP - datetime
-	           @soluongkhop , -- SOLUONGKHOP - int
-	           @giakhop , -- GIAKHOP - float
-	           @idlenhdat -- IDLENHDAT - int
-	         )
-    END
- ELSE --IF  (@giadatMB >= @giadat)
-   BEGIN
-	 INSERT INTO dbo.LENHDAT
-	         ( MACP ,
-	           NGAYDAT ,
-	           LOAIGD ,
-	           LOAILENH,
-			   SOLUONG,
-			   GIADAT,
-			   TRANGTHAILENH
-	         )
-	 VALUES  ( @macp,
-			   @Ngay, -- NGAYKHOP - datetime
-			   @LoaiGD,
-			   'LO',
-	           @soluongMB , -- SOLUONGKHOP - int
-	           @giadatMB , -- GIAKHOP - float
-	           N'CK' 
-	         )
-	SET @soluongMB=0
-    --GOTO THOAT
+					  UPDATE dbo.LENHDAT  
+						SET SOLUONG = SOLUONG - @soluongMB,TRANGTHAILENH='KMP'
+						WHERE CURRENT OF @CrsrVar
+					  SET @soluongMB = 0
+					END
+
+				INSERT INTO LENHKHOP(NGAYKHOP,SOLUONGKHOP,GIAKHOP, IDLENHDAT)
+				VALUES(@ngay,@soluongkhop,@giakhop,@id)
+				-- support dependency--start
+				IF EXISTS (SELECT * FROM BANGGIATRUCTUYEN WHERE MACP=@macp)
+					BEGIN
+						update BANGGIATRUCTUYEN set GIAKHOP=@giakhop, KHOILUONGKHOP=@soluongkhop where MACP=@macp
+					END
+				ELSE
+					BEGIN
+						INSERT INTO BANGGIATRUCTUYEN (MACP,GIAKHOP,KHOILUONGKHOP) VALUES (@macp,@giakhop,@soluongkhop)
+					END
+				-- support dependency--end
+				FETCH NEXT FROM @CrsrVar INTO  @ngaydat , @soluong , @giadat, @id
+			 END
+	   ELSE
+			GOTO THOAT
 	END
 
-	END
-FETCH NEXT FROM @CrsrVar  INTO  @ngaydat , @soluong , @giadat ,@idlenhdat
-END
 THOAT:
-    CLOSE @CrsrVar
-    DEALLOCATE @CrsrVar
-
-GO
-
+IF (@soluongMB > 0)
+	BEGIN
+		INSERT INTO LENHDAT(MACP,NGAYDAT,LOAIGD,LOAILENH,SOLUONG,GIADAT,TRANGTHAILENH)
+		VALUES(@macp,@ngay, @LoaiGD,'LO',@soluongMB,@giadatMB,'CK')
+		-- support dependency
+		IF NOT EXISTS (SELECT * FROM BANGGIATRUCTUYEN WHERE MACP=@macp)
+			BEGIN
+				INSERT INTO BANGGIATRUCTUYEN (MACP) VALUES (@macp)
+			END
+	END
+CLOSE @CrsrVar
+DEALLOCATE @CrsrVar
 
 
 
@@ -359,12 +325,14 @@ BEGIN
 		BEGIN
 			UPDATE dbo.BANGGIATRUCTUYEN
 			SET KLM1 = KLM1 + @SOLUONG WHERE MACP = @MACP
+			RETURN
 		END
 		-- equal GiaMua2
 		IF (@GIADAT = @GIA_MUA2)
 		BEGIN
 			UPDATE dbo.BANGGIATRUCTUYEN
 			SET KLM2 = KLM2 + @SOLUONG WHERE MACP = @MACP
+			RETURN
 		END
 
 		-- bigger GiaMua1
@@ -372,12 +340,14 @@ BEGIN
 		BEGIN
 			UPDATE dbo.BANGGIATRUCTUYEN
 			SET GIAMUA1 = @GIADAT, KLM1 = @SOLUONG WHERE MACP = @MACP
+			RETURN
 		END
 		-- bigger GiaMua2
 		IF (@GIADAT > @GIA_MUA2 AND @GIADAT < @GIA_MUA1 AND @SOLUONG > 0)
 		BEGIN
 			UPDATE dbo.BANGGIATRUCTUYEN
 			SET GIAMUA2 = @GIADAT, KLM2 = @SOLUONG WHERE MACP = @MACP
+			RETURN
 		END
 	-- << End
 	END
@@ -397,12 +367,14 @@ BEGIN
 		BEGIN
 			UPDATE dbo.BANGGIATRUCTUYEN
 			SET KLB1 = KLB1 + @SOLUONG WHERE MACP = @MACP
+			RETURN
 		END
 		-- equal GiaBan2
 		IF (@GIADAT = @GIA_BAN2)
 		BEGIN
 			UPDATE dbo.BANGGIATRUCTUYEN
 			SET KLB2 = KLB2 + @SOLUONG WHERE MACP = @MACP
+			RETURN
 		END
 
 		-- smaller GiaBan1
@@ -410,12 +382,14 @@ BEGIN
 		BEGIN
 			UPDATE dbo.BANGGIATRUCTUYEN
 			SET GIABAN1 = @GIADAT, KLB1 = @SOLUONG WHERE MACP = @MACP
+			RETURN
 		END
 		-- smaller GiaBan2
 		IF (@GIADAT < @GIA_BAN2 AND @GIADAT > @GIA_BAN1 AND @SOLUONG > 0)
 		BEGIN
 			UPDATE dbo.BANGGIATRUCTUYEN
 			SET GIABAN2 = @GIADAT, KLB2 = @SOLUONG WHERE MACP = @MACP
+			RETURN
 		END
 	-- << End
 	END
